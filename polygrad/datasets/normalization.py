@@ -24,7 +24,10 @@ class DatasetNormalizer:
         self.normalizers = {}
         for key, val in dataset.items():
             try:
-                self.normalizers[key] = normalizer(val, device)
+                if key == "rewards":
+                    self.normalizers[key] = MinMaxNormalizer(val, device)
+                else:
+                    self.normalizers[key] = normalizer(val, device)
             except:
                 print(f"[ utils/normalization ] Skipping {key} | {normalizer}")
 
@@ -233,6 +236,68 @@ class LimitsNormalizer(Normalizer):
         self.maxs_torch = torch.from_numpy(self.maxs).float().to(self.device)
         return
 
+    def get_metrics(self):
+        metrics = {str(i) + "_min": self.mins[i] for i in range(self.mins.size)}
+        metrics.update({str(i) + "_max": self.maxs[i] for i in range(self.maxs.size)})
+        return metrics
+
+
+class MinMaxNormalizer(Normalizer):
+    """
+    Normalizes data to the range [0, 1].
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.ranges = self.maxs - self.mins
+        self.ranges_torch = torch.from_numpy(self.ranges).float().to(self.device)
+
+    def __repr__(self):
+        return (
+            f"""[ MinMaxNormalizer ] dim: {self.mins.size}\n    """
+            f"""mins: {np.round(self.mins, 2)}\n    """
+            f"""maxs: {np.round(self.maxs, 2)}\n    """
+        )
+
+    def normalize(self, x):
+        """
+        Normalize data to [0, 1].
+        """
+        #return (x-x.min())/(x.max()-x.min() + 1e-6)
+        normalized = (x - self.mins) / (self.ranges + 1e-6)
+        return (x - self.mins) / (self.ranges + 1e-6)
+
+    def normalize_torch(self, x):
+        """
+        Normalize PyTorch tensors to [0, 1].
+        """
+        return (x - self.mins_torch) / (self.ranges_torch + 1e-6)
+
+    def unnormalize(self, x):
+        """
+        Revert normalized data back to original scale.
+        """
+        return x * (self.ranges + 1e-6) + self.mins
+
+    def unnormalize_torch(self, x):
+        """
+        Revert normalized PyTorch tensors back to original scale.
+        """
+        return x * (self.ranges_torch + 1e-6) + self.mins_torch
+
+    def update_statistics(self, dataset):
+        """
+        Update the min and max statistics based on a new dataset.
+        """
+        self.X = dataset.astype(np.float32)
+        self.mins = np.min(self.X, axis=0)
+        self.maxs = np.max(self.X, axis=0)
+        self.ranges = self.maxs - self.mins
+        self.mins_torch = torch.from_numpy(self.mins).float().to(self.device)
+        self.maxs_torch = torch.from_numpy(self.maxs).float().to(self.device)
+        self.ranges_torch = torch.from_numpy(self.ranges).float().to(self.device)
+        return
+    
     def get_metrics(self):
         metrics = {str(i) + "_min": self.mins[i] for i in range(self.mins.size)}
         metrics.update({str(i) + "_max": self.maxs[i] for i in range(self.maxs.size)})

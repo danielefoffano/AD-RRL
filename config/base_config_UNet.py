@@ -26,7 +26,7 @@ base = {
     'env_name':'Hopper-v3',
     'log_interval': 10000,
     'timestamp': '{:%Y-%m-%d-%H:%M:%S}'.format(datetime.datetime.now()),
-    'save_freq': 500000,
+    'save_freq': None,
     'n_environment_steps': 1000000,
     'load_path': None,
     'load_step': None,
@@ -91,7 +91,6 @@ base = {
     'entropy_weight': 1e-5,
     'lr_actor': 3e-5,
     'lr_critic': 3e-4,
-    'hidden_layers':2,
     'ac_grad_clip': 0.1,
     'normalize_adv': True,
     'learned_std': True,
@@ -121,8 +120,10 @@ base = {
     
     # Value diffusion model
     'values': {
-        'model': 'models.ResidualMLPDenoiserValue',
-        'diffusion': 'models.ValueGaussianDiffusion',
+        'model': 'models.ValueFunction',
+        'diffusion': 'models.ValueDiffusion',
+        #'model': 'models.ValueFunction',
+        #'diffusion': 'models.ValueDiffusion',
         'horizon': 10,
         'n_diffusion_steps': 128,
         'dim_mults': (1, 2, 4, 8),

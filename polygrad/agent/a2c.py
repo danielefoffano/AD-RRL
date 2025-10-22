@@ -5,7 +5,7 @@ import copy
 import torch.nn.functional as F
 import torch.distributions as D
 import importlib
-import wandb
+#import wandb
 from torch import Tensor
 from polygrad.utils.training import EMA
 from .functions import *
@@ -68,6 +68,9 @@ class ActorCritic(nn.Module):
             in_dim, actor_out_dim, hidden_dim, hidden_layers, layer_norm
         ).to(self.device)
         self.critic = MLP(in_dim, 1, hidden_dim, hidden_layers, layer_norm).to(
+            self.device
+        )
+        self.cumul_r = MLP(in_dim + self.action_dim, 1, hidden_dim, hidden_layers, layer_norm).to(
             self.device
         )
         self.critic_target = copy.deepcopy(self.critic)
@@ -133,6 +136,10 @@ class ActorCritic(nn.Module):
     def forward_value(self, features: Tensor) -> Tensor:
         y = self.critic.forward(features)
         return y
+    
+    def forward_cumul_r(self, features: Tensor) -> Tensor:
+        y = self.cumul_r.forward(features)
+        return y
 
     def update_lr(self, update_size):
         loss = -(self.log_actor_lr * (self.target_update - update_size)).mean()
@@ -159,12 +166,12 @@ class ActorCritic(nn.Module):
 
         target_y = np.exp(-0.5 * act_x**2 / std**2) / (std * np.sqrt(2 * np.pi))
         metrics = {
-            f"distr/step_{step}_act_density": wandb.plot.line_series(
-                xs=act_x,
-                ys=[act_y, target_y],
-                keys=["Action distr", "Policy distr"],
-                title=f"Action Distributions Step {step}",
-            ),
+            # f"distr/step_{step}_act_density": wandb.plot.line_series(
+            #     xs=act_x,
+            #     ys=[act_y, target_y],
+            #     keys=["Action distr", "Policy distr"],
+            #     title=f"Action Distributions Step {step}",
+            # ),
         }
         return metrics
 
@@ -215,7 +222,6 @@ class ActorCritic(nn.Module):
 
         # When calculating losses, should ignore terminal states, or anything after
         reality_weight = (1 - terminals[:, :-1]).log().cumsum(dim=1).exp()
-
         # Compute normalized logprob for logging
         policy_distr = self.forward_actor(
             states[:, :-1, :], normed_input=self.use_normed_inputs

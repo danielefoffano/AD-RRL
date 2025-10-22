@@ -7,7 +7,7 @@ from .normalization import DatasetNormalizer
 from .buffer import ReplayBuffer
 
 
-Batch = namedtuple("Batch", "trajectories actions conditions sim_states")
+Batch = namedtuple("Batch", "trajectories actions conditions sim_states value value_trajectories")
 
 
 class OnlineSequenceDataset(torch.utils.data.Dataset):
@@ -36,6 +36,9 @@ class OnlineSequenceDataset(torch.utils.data.Dataset):
         self.update_norm_interval = update_norm_interval
         self.max_n_episodes = max_n_episodes
         self.termination_penalty = termination_penalty
+
+        self.discount = 0.99
+        self.discounts = self.discount ** np.arange(self.max_path_length)[:,None]
 
         self.data_buffer = ReplayBuffer(
             max_n_episodes, max_path_length, termination_penalty
@@ -108,21 +111,34 @@ class OnlineSequenceDataset(torch.utils.data.Dataset):
         path_ind, start, end = self.indices[idx]
 
         trajectory_list = []
+        value = None
+        value_obs = None
         for key in ["observations", "rewards", "terminals"]:
             data = self.data_buffer[key][path_ind, start:end]
             if key in self.norm_keys:
                 data = self.normalizer(data, key)
+            if key == "rewards":
+                discounts = self.discounts[:len(data)]
+                value = np.array([(discounts * data).sum()], dtype=np.float32)
+
             trajectory_list.append(data)
 
         actions = self.data_buffer["actions"][path_ind, start:end]
+
+        if "observations" in self.norm_keys:
+            value_obs = self.normalizer(self.data_buffer["observations"][path_ind, start:end], "observations")
+        else:
+            value_obs = self.data_buffer["observations"][path_ind, start:end]
+        
         if "actions" in self.norm_keys:
             actions = self.normalizer(actions, "actions")
 
         sim_states = self.data_buffer["sim_states"][path_ind, start:end]
+        value_trajectories = np.concatenate([actions, value_obs], axis=-1)
 
         conditions = self.get_conditions(trajectory_list[0])
         trajectories = np.concatenate(trajectory_list, axis=-1)
-        batch = Batch(trajectories, actions, conditions, sim_states)
+        batch = Batch(trajectories, actions, conditions, sim_states, value, value_trajectories)
         return batch
 
     def reset(self):

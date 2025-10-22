@@ -5,6 +5,8 @@ wandb/
 
 *.sif
 *.pkl
+*.pdf
+*.png 
 
 fuse.cfg
 
@@ -126,6 +128,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+python310-adversarial/*
 
 # Spyder project settings
 .spyderproject
@@ -145,3 +148,22 @@ dmypy.json
 # Pyre type checker
 .pyre/
 slurm_logs
+
+*.sh
+*.out
+
+final_logs.zip
+logs.zip
+extracted_data.csv
+final plots/
+old_plots/
+Plots_Cheetah/
+Plots_Hopper/
+Plots_Walker/
+.vscode/
+launch.json
+scripts/visualization.py
+scripts/plot_heatmap.py
+scripts/evaluate_adv_poly_multi.py
+ppo_lti.zip
+scripts/a2c_lti.zip

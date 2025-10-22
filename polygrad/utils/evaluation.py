@@ -1,9 +1,10 @@
 import numpy as np
 import torch
 import torch.distributions as D
-import wandb
+#import wandb
 from os.path import join
-
+import os
+import csv
 
 def get_standardized_stats(policy_distr, act):
     # Compute logprob with all action distributions normalized to standard normal.
@@ -74,6 +75,7 @@ def evaluate_policy(
     avg_return = np.mean(np.array(returns))
     min_return = np.min(np.array(returns))
     max_return = np.max(np.array(returns))
+    std_return = np.std(np.array(returns))
     avg_ep_len = np.mean(np.array(ep_lens))
     min_ep_len = np.min(np.array(ep_lens))
     max_ep_len = np.max(np.array(ep_lens))
@@ -82,14 +84,24 @@ def evaluate_policy(
     metrics["avg_return"] = avg_return
     metrics["min_return"] = min_return
     metrics["max_return"] = max_return
+    metrics["std_return"] = std_return
     metrics["avg_ep_len"] = avg_ep_len
     metrics["min_ep_len"] = min_ep_len
     metrics["max_ep_len"] = max_ep_len
 
     if savepath is not None:
-        savepath = join(savepath, f"step-{step}-real-policy-traj.png")
+        save_image_path = os.path.join(savepath, f"step-{step}-real-policy-traj.png")
+        csv_path = os.path.join(savepath, "training_scores.csv")
+        file_exists = os.path.isfile(csv_path)
+
+        with open(csv_path, mode="a", newline="") as file:
+            writer = csv.writer(file)
+            if not file_exists:
+                writer.writerow(["step", "avg_return", "std_return", "avg_ep_len"])
+            writer.writerow([step, avg_return, std_return, avg_ep_len])
 
     if renderer is not None:
-        fig = renderer.composite(states, actions, rewards, savepath)
-        metrics.update({f"real-policy-traj": wandb.Image(fig)})
+        fig = renderer.composite(states, actions, rewards, save_image_path)
+        #metrics.update({f"real-policy-traj": wandb.Image(fig)})
+        
     return metrics

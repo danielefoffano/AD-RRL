@@ -1,10 +1,12 @@
-from collections import namedtuple
+from collections import namedtuple, defaultdict
+import pickle
 import numpy as np
 import torch
 from torch import nn
 import pdb
 import torch.nn.functional as F
 from polygrad.sampling.functions import default_sample_fn, policy_guided_sample_fn
+from os.path import join
 
 import polygrad.utils as utils
 from .helpers import (
@@ -148,9 +150,12 @@ class GaussianDiffusion(nn.Module):
         self,
         shape,
         cond,
+        sample_c,
+        savepath,
         act=None,
         normalizer=None,
         policy=None,
+        value_f=None,
         return_sequence=False,
         verbose=True,
         return_chain=False,
@@ -170,8 +175,10 @@ class GaussianDiffusion(nn.Module):
                 (shape[0], shape[1], self.action_dim), device=x.device
             )
         seq = []
+        c_dict = defaultdict(list)
+
         for t in reversed(range(0, self.n_timesteps)):
-            x, act_noisy, metrics = sample_fn(
+            x, act_noisy, c_metrics, metrics = sample_fn(
                 self,
                 x,
                 act_noisy,
@@ -181,6 +188,8 @@ class GaussianDiffusion(nn.Module):
                 q_sample=self.q_sample,
                 normalizer=normalizer,
                 policy=policy,
+                value_f=value_f,
+                sample_c = sample_c,
                 **sample_kwargs
             )
             if sample_fn is not policy_guided_sample_fn and t > 0:
@@ -188,14 +197,22 @@ class GaussianDiffusion(nn.Module):
             x = apply_conditioning(x, cond, self.observation_dim)
             if return_sequence:
                 seq.append(x.cpu().detach().numpy())
+            if sample_c and (c_metrics is not None):
+                c_dict[t] = c_metrics
+        if sample_c:
+            with open(savepath+".pkl", 'wb') as f1:
+                pickle.dump(c_dict, f1)
         return x, act_noisy, seq, metrics
 
     def conditional_sample(
         self,
         cond,
+        sample_c,
+        savepath,
         act=None,
         normalizer=None,
         policy=None,
+        value_f=None,
         horizon=None,
         **sample_kwargs
     ):
@@ -207,7 +224,7 @@ class GaussianDiffusion(nn.Module):
         shape = (batch_size, horizon, self.transition_dim)
 
         return self.p_sample_loop(
-            shape, cond, act=act, normalizer=normalizer, policy=policy, **sample_kwargs
+            shape, cond, sample_c, savepath, act=act, normalizer=normalizer, policy=policy, value_f=value_f, **sample_kwargs
         )
 
     # ------------------------------------------ training ------------------------------------------#
@@ -264,5 +281,5 @@ class GaussianDiffusion(nn.Module):
         t = torch.randint(0, self.n_timesteps, (batch_size,), device=x.device).long()
         return self.p_losses(x, act, cond, t)
 
-    def forward(self, cond, *args, **kwargs):
-        return self.conditional_sample(cond, *args, **kwargs)
+    def forward(self, cond, sample_c, savepath, *args, **kwargs):
+        return self.conditional_sample(cond, sample_c, savepath, *args, **kwargs)

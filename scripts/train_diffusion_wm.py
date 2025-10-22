@@ -1,7 +1,7 @@
 import polygrad.utils as utils
 import os
 import torch
-import wandb
+#import wandb
 import importlib
 import dill as pickle
 import numpy as np
@@ -67,7 +67,7 @@ reload_dataset(join(args.load_path, f"step-{args.load_step}-dataset.npy"), datas
 
 # initialise wandb
 utils.report_parameters(model)
-wandb.init(entity="a2i", project=args.project, group=args.group, config=args)
+#.init(entity="a2i", project=args.project, group=args.group, config=args)
 
 # -----------------------------------------------------------------------------#
 # --------------------------- prepare to train --------------------------------#
@@ -77,9 +77,9 @@ agent_dataloader = utils.training.cycle(
     torch.utils.data.DataLoader(
         dataset,
         batch_size=args.agent_batch_size,
-        num_workers=2,
+        num_workers=0,
         shuffle=True,
-        pin_memory=True,
+        pin_memory=False,
     )
 )
 
@@ -105,5 +105,5 @@ while step < train_diffusion_steps:
             for key in diffusion_metrics.keys()
         ]
 
-    wandb.log(metrics, step=step)
+    #wandb.log(metrics, step=step)
     step += 1

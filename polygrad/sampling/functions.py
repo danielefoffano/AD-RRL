@@ -1,11 +1,12 @@
 import torch
-
+import math
 from polygrad.models.helpers import (
     extract,
     apply_conditioning,
 )
 import numpy as np
-
+from scipy.stats import chi
+from collections import defaultdict
 
 def make_timesteps(batch_size, i, device):
     t = torch.full((batch_size,), i, device=device, dtype=torch.long)
@@ -14,7 +15,7 @@ def make_timesteps(batch_size, i, device):
 
 @torch.no_grad()
 def default_sample_fn(
-    model, x, act, cond, t, q_sample, condition_noise_scale, policy, normalizer
+    model, x, act, cond, t, q_sample, condition_noise_scale, policy, value_f, normalizer, sample_c
 ):
     timesteps = make_timesteps(x.shape[0], t, x.device)
 
@@ -30,13 +31,12 @@ def default_sample_fn(
     # no noise when t == 0
     noise = torch.randn_like(x)
     noise[timesteps == 0] = 0
-    return model_mean + model_std * noise, None, 0.0
+    return model_mean + model_std * noise, None, None, 0.0
 
 
 def clip_change(old, new, tol=1.0):
     new = old + torch.clamp((new - old), min=-tol, max=tol)
     return new
-
 
 def policy_guided_sample_fn(
     model,
@@ -46,7 +46,9 @@ def policy_guided_sample_fn(
     t,
     q_sample,
     policy,
+    value_f,
     normalizer,
+    sample_c,
     condition_noise_scale=0.0,
     guidance_scale=1.0,
     action_noise_scale=1.0,
@@ -102,7 +104,7 @@ def policy_guided_sample_fn(
             "min_change": (model_mean - x).abs().min().item(),
             "std_change": (model_mean - x).abs().std().item(),
         }
-        return model_mean, act_noisy, metrics
+        return model_mean, act_noisy, None, metrics
 
     if guidance_type == "grad":
         # unnormalize as policy ouputs unnormalized actions
@@ -129,7 +131,7 @@ def policy_guided_sample_fn(
 
         # gradient update to actions
         act_grad = act_noisy_unnormed.grad.detach()
-        act_noisy_unnormed = (act_noisy_unnormed + guidance_scale * act_grad).detach()
+        act_noisy_unnormed = (act_noisy_unnormed + guidance_scale * act_grad).detach()   
 
         # gradient update to states
         if update_states:
@@ -161,4 +163,42 @@ def policy_guided_sample_fn(
     elif guidance_type == "none":
         act_sample = act_noisy
 
-    return model_mean + model_std * noise, act_sample, 0.0
+
+    x_value = torch.cat((act_noisy, guide_states), 2)
+    x_value.requires_grad = True
+    y, value_grad = value_f.gradients(x_value, cond, timesteps)
+
+    #Adversarial update observations. Gradient shape batch_size x horizon x act_dim+obs_dim
+    #Norm of gradient by trajectory. shape: batch_size
+    #For each traj, norm by feature on the horizon. shape: batch_size x 1 x act_dim+obs_dim
+    #   Normalize each feature using the other features in its same trajectory -> trajectory independent
+    #   If we want to make it trajectory dependent we can take average across batch?
+    normalized_grad = value_grad#/torch.linalg.vector_norm(value_grad, dim=1, keepdim=True)
+
+    n_dim = guide_states[0].shape[0]
+    p_dim = guide_states[0].shape[1]
+
+    G = normalized_grad[:,:,model.action_dim:]
+    U = torch.eye(n_dim, device=x.device)*(model_std[0][0][0].item() ** 2)
+    V = torch.eye(p_dim, device = x.device)*(model_std[0][0][0].item() ** 2)
+
+    U_inv = torch.inverse(U)
+    V_inv = torch.inverse(V)
+
+    UGV = torch.einsum('ij,bjk,kl->bil', U, G, V)
+    UGV_T = UGV.transpose(-2, -1)
+    squared_term = torch.einsum('ij, bjk, kl, bkm->bim', V_inv, UGV_T, U_inv, UGV)
+    squared_term_trace = torch.einsum('bii->b', squared_term)
+
+    c1 = torch.sqrt(2*math.log((1/0.1)**(1/model.n_timesteps))/squared_term_trace)
+
+    all_c = c1.view(c1.shape[0], 1, 1)
+    cvar_update = all_c * UGV
+
+    obs_recon = (guide_states - cvar_update).detach()
+    x_recon[:, :, : model.observation_dim] = obs_recon
+    x_recon = apply_conditioning(x_recon, cond, model.observation_dim)
+    model_mean, _, model_log_variance = model.q_posterior(
+        x_start=x_recon, x_t=x, t=timesteps
+    )
+    return model_mean + model_std * noise, act_sample, all_c.cpu().detach().numpy(), 0.0

@@ -1,6 +1,6 @@
 import polygrad.utils as utils
 import torch
-import wandb
+#import wandb
 import numpy as np
 from polygrad.utils.evaluation import evaluate_policy
 from polygrad.utils.envs import create_env
@@ -15,6 +15,8 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 class Parser(utils.Parser):
     config: str = "config.simple_maze"
+    seed: int = 1
+    run_number: int = 0
 
 
 args = Parser().parse_args()
@@ -23,6 +25,8 @@ expl_env = create_env(args.env_name, args.suite)
 eval_env = create_env(args.env_name, args.suite)
 random_episodes = utils.rl.random_exploration(args.n_prefill_steps, expl_env)
 
+run_nr = args.run_number
+print(f"Run number {run_nr}")
 print("Seed", args.seed)
 utils.set_all_seeds(args.seed)
 
@@ -34,8 +38,10 @@ else:
     renderer = None
 model = configs["model_config"]()
 diffusion = configs["diffusion_config"](model)
+value_model = configs["value_model_config"]()
+value_diffusion = configs["value_diffusion_config"](value_model)
 dataset = configs["dataset_config"](random_episodes)
-diffusion_trainer = configs["trainer_config"](diffusion, dataset, eval_env, renderer)
+diffusion_trainer = configs["trainer_config"](diffusion, dataset, eval_env, value_diffusion, renderer)
 ac = configs["ac_config"](normalizer=dataset.normalizer)
 agent = configs["agent_config"](
     diffusion_model=diffusion_trainer.ema_model,
@@ -43,10 +49,11 @@ agent = configs["agent_config"](
     dataset=dataset,
     env=eval_env,
     renderer=renderer,
+    value_model = diffusion_trainer.ema_model_value
 )
 
 utils.report_parameters(model)
-wandb.init(project=args.project, group=args.group, config=args, name=args.run_name)
+#.init(project=args.project, group=args.group, config=args, name=args.run_name)
 
 # -----------------------------------------------------------------------------#
 # --------------------------- prepare to train --------------------------------#
@@ -56,9 +63,19 @@ agent_dataloader = utils.training.cycle(
     torch.utils.data.DataLoader(
         dataset,
         batch_size=args.agent_batch_size,
-        num_workers=2,
+        num_workers=0,
         shuffle=True,
-        pin_memory=True,
+        pin_memory=False,
+    )
+)
+
+ac_dataloader = utils.training.cycle(
+    torch.utils.data.DataLoader(
+        dataset,
+        batch_size=args.agent_batch_size,
+        num_workers=0,
+        shuffle=True,
+        pin_memory=False,
     )
 )
 
@@ -124,7 +141,8 @@ while step < args.n_environment_steps:
     if step % int(1 / args.train_agent_ratio) == 0:
         if step >= args.pretrain_diffusion:
             batch = next(agent_dataloader)
-            agent_metrics = agent.training_step(batch, step)
+            ac_batch = next(ac_dataloader)
+            agent_metrics = agent.training_step(batch, ac_batch, step)
             if step % train_metrics_interval == 0:
                 [
                     metrics.update({f"agent/{key}": agent_metrics[key]})
@@ -149,7 +167,7 @@ while step < args.n_environment_steps:
 
     if args.save_freq is not None:
         if step % args.save_freq == 0:
-            agent.save(args.savepath, step)
+            agent.save(args.savepath, step, run=run_nr)
 
     if step % args.eval_interval == 0:
         eval_metrics = evaluate_policy(
@@ -161,7 +179,10 @@ while step < args.n_environment_steps:
             use_mean=True,
             n_episodes=20,
             renderer=renderer,
+            savepath=args.savepath
         )
 
-    wandb.log(metrics, step=step)
+    #wandb.log(metrics, step=step)
     step += 1
+
+agent.save(args.savepath, step, run=run_nr)

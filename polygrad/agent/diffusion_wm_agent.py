@@ -5,7 +5,7 @@ import torch.distributions as D
 import dill as pickle
 import os
 import time
-import wandb
+#import wandb
 
 from torch import Tensor
 from os.path import join
@@ -25,6 +25,7 @@ class DiffusionWMAgent(nn.Module):
         log_path,
         env,
         diffusion_method,
+        value_model,
         renderer=None,
         guidance_scale=1.0,
         log_interval=100,
@@ -42,6 +43,7 @@ class DiffusionWMAgent(nn.Module):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.diffusion_model = diffusion_model
         self.ac = actor_critic
+        self.value_model = value_model
         self.env = env
         self.dataset = dataset
         self.log_path = log_path
@@ -70,13 +72,17 @@ class DiffusionWMAgent(nn.Module):
             assert self.diffusion_model.horizon == 2
             assert self.rollout_steps is not None
 
-    def imagine_polygrad(self, conditions):
+    def imagine_polygrad(self, conditions, step):
         """
         Generate trajectories using policy-guided trajectory diffusion (polygrad)
         """
+        sample_c = step % 10000 == 0
         trajs, imag_actions, seq, sampling_metrics = self.diffusion_model(
             conditions,
+            sample_c,
+            join(self.log_path, f"c_dictionary_{step}"),
             policy=self.ac.forward_actor,
+            value_f = self.value_model, #self.ac.forward_value,
             verbose=False,
             normalizer=self.dataset.normalizer,
             guidance_scale=torch.exp(self.log_guidance),
@@ -136,7 +142,7 @@ class DiffusionWMAgent(nn.Module):
         imag_terminals = self.unnormalize(imag_terminals, "terminals")
         return imag_states, imag_act, imag_rewards, imag_terminals, {}
 
-    def imagine(self, conditions):
+    def imagine(self, conditions, step):
         self.diffusion_model.eval()
         metrics = dict()
         start = time.time()
@@ -147,7 +153,7 @@ class DiffusionWMAgent(nn.Module):
                 imag_rewards,
                 imag_terminals,
                 sampling_metrics,
-            ) = self.imagine_polygrad(conditions)
+            ) = self.imagine_polygrad(conditions, step)
         elif self.diffusion_method == "autoregressive":
             (
                 imag_obs,
@@ -228,8 +234,8 @@ class DiffusionWMAgent(nn.Module):
         metrics.update(error_metrics)
         return metrics
 
-    def training_step(self, batch, step, log_only=False, max_log=50):
-        obs_norm, act_norm, rew_norm, term, metrics = self.imagine(batch.conditions)
+    def training_step(self, batch, ac_batch, step, log_only=False, max_log=50):
+        obs_norm, act_norm, rew_norm, term, metrics = self.imagine(batch.conditions, step)
         if step >= self.last_log_step + self.log_interval:
             metrics.update(
                 self.get_metrics(
@@ -243,6 +249,16 @@ class DiffusionWMAgent(nn.Module):
                 )
             )
             self.last_log_step = step
+
+        #obs_norm = torch.concat((obs_norm, ac_batch.trajectories[:,:,:self.dataset.observation_dim].to("cuda")), dim = 0)
+        #act_norm = torch.concat((act_norm, ac_batch.actions.to("cuda")), dim=0)
+        #rew_norm = torch.concat((rew_norm, ac_batch.trajectories[:,:, -2].to("cuda")), dim=0)
+        #term = torch.concat((term, self.unnormalize(torch.clamp(ac_batch.trajectories[:,:, -1].to("cuda"), max=1).to("cuda"), "terminals")), dim=0)
+        
+        #term = self.unnormalize(torch.clamp(term[:,:-1], max=1).to("cuda"), "terminals")
+        #obs_norm = self.normalize(batch.trajectories[:,:,:self.dataset.observation_dim].to("cuda"), "observations")
+        #act_norm = self.normalize(batch.actions.to("cuda"), "actions")
+        #rew_norm = self.normalize(batch.trajectories[:,:, -2].to("cuda"), "rewards")
 
         ac_metrics = self.ac.training_step(
             states=obs_norm,
@@ -263,24 +279,29 @@ class DiffusionWMAgent(nn.Module):
         )
         return metrics
 
-    def save(self, path, step):
+    def save(self, path, step, run=0):
         """Save the actor critic, diffusion model and current dataset."""
 
-        ac_path = join(path, f"step-{step}-ac.pt")
-        diffusion_path = join(path, f"step-{step}-diffusion.pt")
+        ac_path = join(path, f"step-{step}-ac--{run}.pt")
+        diffusion_path = join(path, f"step-{step}-diffusion--{run}.pt")
         torch.save(self.ac.state_dict(), ac_path)
         torch.save(self.diffusion_model.state_dict(), diffusion_path)
         return
 
-    def load(self, path, step, load_a2c=True, load_diffusion=True, load_dataset=True):
+    def load(self, path, step, load_a2c=True, load_diffusion=True, load_dataset=True, run=None):
         """Load the actor critic and diffusion model."""
 
+        if run is not None:
+            last_part = f"--{run}.pt"
+        else:
+            last_part = ".pt"
+
         if load_a2c:
-            ac_path = join(path, f"step-{step}-ac.pt")
+            ac_path = join(path, f"step-{step}-ac"+last_part)
             self.ac.load_state_dict(torch.load(ac_path, map_location=self.device))
 
         if load_diffusion:
-            diffusion_path = join(path, f"step-{step}-diffusion.pt")
+            diffusion_path = join(path, f"step-{step}-diffusion"+last_part)
             self.diffusion_model.load_state_dict(
                 torch.load(diffusion_path, map_location=self.device)
             )

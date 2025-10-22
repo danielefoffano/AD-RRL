@@ -1,7 +1,7 @@
 import polygrad.utils as utils
 import os
 import torch
-import wandb
+#import wandb
 import importlib
 import dill as pickle
 import numpy as np
@@ -55,7 +55,7 @@ assert args.load_path is not None
 ac_path = join(args.load_path, f"step-{args.load_step}-ac.pt")
 ac.load_state_dict(torch.load(ac_path, map_location=device))
 reload_dataset(join(args.load_path, f"step-{args.load_step}-dataset.npy"), dataset)
-wandb.init(entity="a2i", project=args.project, group=args.group, config=args)
+#wandb.init(entity="a2i", project=args.project, group=args.group, config=args)
 
 # -----------------------------------------------------------------------------#
 # --------------------------- prepare to train --------------------------------#
@@ -107,12 +107,12 @@ while step < train_diffusion_steps:
         )
         metrics.update(imag_metrics)
         metrics.update(error_metrics)
-        wandb.log(metrics, step=step)
+        #wandb.log(metrics, step=step)
         print("Error Metrics: ")
         print(error_metrics)
         print("\n")
 
     if step % 100 == 0:
         print("Train step: ", step)
-        wandb.log(metrics, step=step)
+        #wandb.log(metrics, step=step)
     step += 1
